@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   Model,
+  ModelContext,
   NonSystemMessage,
   Tool,
   ToolMessage,
@@ -9,17 +10,20 @@ import type {
 } from "@/foundation";
 
 import type { AgentMiddleware } from "./agent-middleware";
+import type { SkillFrontmatter } from "./skills/types";
 
 /**
  * A context that is used to invoke a React agent.
  */
 export interface AgentContext {
   /** The system prompt to use to invoke the agent. */
-  prompt?: string;
-  /** The tools to use to invoke the agent. */
-  tools?: Tool[];
+  prompt: string;
   /** The messages to use to invoke the agent. */
   messages: NonSystemMessage[];
+  /** The tools to use to invoke the agent. */
+  tools?: Tool[];
+  /** The skills to use to invoke the agent. */
+  skills?: SkillFrontmatter[];
 }
 
 /**
@@ -56,13 +60,15 @@ export class Agent {
     name,
     model,
     prompt,
+    messages = [],
     tools,
     middlewares = [],
-    maxSteps = 25,
+    maxSteps = 100,
   }: {
     name?: string;
     model: Model;
-    prompt?: string;
+    prompt: string;
+    messages?: NonSystemMessage[];
     tools?: Tool[];
     middlewares?: AgentMiddleware[];
     maxSteps?: number;
@@ -72,7 +78,7 @@ export class Agent {
     this._context = {
       prompt,
       tools,
-      messages: [],
+      messages,
     };
     this.middlewares = middlewares;
     this.options = { maxSteps };
@@ -91,7 +97,7 @@ export class Agent {
   get prompt() {
     return this._context.prompt;
   }
-  set prompt(prompt: string | undefined) {
+  set prompt(prompt: string) {
     this._context.prompt = prompt;
   }
 
@@ -112,7 +118,7 @@ export class Agent {
     await this._beforeAgentRun();
     for (let step = 1; step <= this.options.maxSteps; step++) {
       await this._beforeAgentStep(step);
-      const assistantMessage = await this._think();
+      const assistantMessage = await this._reason();
       yield assistantMessage;
 
       const toolUses = this._extractToolUses(assistantMessage);
@@ -127,12 +133,14 @@ export class Agent {
     throw new Error("Maximum number of steps reached");
   }
 
-  private async _think(): Promise<AssistantMessage> {
-    const message = await this.model.invoke({
+  private async _reason(): Promise<AssistantMessage> {
+    const modelContext: ModelContext = {
       prompt: this.prompt,
       messages: this.messages,
       tools: this.tools,
-    });
+    };
+    await this._beforeModel(modelContext);
+    const message = await this.model.invoke(modelContext);
     this._appendMessage(message);
     return message;
   }
@@ -173,6 +181,16 @@ export class Agent {
 
   private _appendMessage(message: NonSystemMessage) {
     this.messages.push(message);
+  }
+
+  private async _beforeModel(modelContext: ModelContext) {
+    for (const middleware of this.middlewares) {
+      if (!middleware.beforeModel) continue;
+      const result = await middleware.beforeModel(modelContext, this._context);
+      if (result) {
+        Object.assign(modelContext, result);
+      }
+    }
   }
 
   private async _beforeAgentRun() {
