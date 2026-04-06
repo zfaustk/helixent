@@ -8,6 +8,8 @@ import type {
   UserMessage,
 } from "@/foundation";
 
+import type { AgentMiddleware } from "./agent-middleware";
+
 /**
  * A context that is used to invoke a React agent.
  */
@@ -17,7 +19,7 @@ export interface AgentContext {
   /** The tools to use to invoke the agent. */
   tools?: Tool[];
   /** The messages to use to invoke the agent. */
-  messages?: NonSystemMessage[];
+  messages: NonSystemMessage[];
 }
 
 /**
@@ -36,9 +38,12 @@ export interface AgentOptions {
  * @param options - The options for the agent.
  */
 export class Agent {
-  private readonly _context: Required<AgentContext>;
+  private readonly _context: AgentContext;
 
+  readonly name?: string;
+  readonly model: Model;
   readonly options: Required<AgentOptions>;
+  readonly middlewares: AgentMiddleware[];
 
   /**
    * Creates a new agent.
@@ -47,18 +52,29 @@ export class Agent {
    * @param context - The context of the agent.
    * @param options - The options for the agent.
    */
-  constructor(
-    // eslint-disable-next-line no-unused-vars
-    readonly name: string,
-    // eslint-disable-next-line no-unused-vars
-    readonly model: Model,
-    context: AgentContext & { messages?: NonSystemMessage[] } = { messages: [] },
-    { maxSteps = 25 }: AgentOptions = {},
-  ) {
-    if (!context.messages) {
-      context.messages = [];
-    }
-    this._context = context as Required<AgentContext>;
+  constructor({
+    name,
+    model,
+    prompt,
+    tools,
+    middlewares = [],
+    maxSteps = 25,
+  }: {
+    name?: string;
+    model: Model;
+    prompt?: string;
+    tools?: Tool[];
+    middlewares?: AgentMiddleware[];
+    maxSteps?: number;
+  }) {
+    this.name = name;
+    this.model = model;
+    this._context = {
+      prompt,
+      tools,
+      messages: [],
+    };
+    this.middlewares = middlewares;
     this.options = { maxSteps };
   }
 
@@ -75,7 +91,7 @@ export class Agent {
   get prompt() {
     return this._context.prompt;
   }
-  set prompt(prompt: string) {
+  set prompt(prompt: string | undefined) {
     this._context.prompt = prompt;
   }
 
@@ -93,14 +109,20 @@ export class Agent {
    */
   async *stream(message: UserMessage): AsyncGenerator<AssistantMessage | ToolMessage> {
     this._appendMessage(message);
+    await this._beforeAgentRun();
     for (let step = 1; step <= this.options.maxSteps; step++) {
+      await this._beforeAgentStep(step);
       const assistantMessage = await this._think();
       yield assistantMessage;
 
       const toolUses = this._extractToolUses(assistantMessage);
-      if (toolUses.length === 0) return;
+      if (toolUses.length === 0) {
+        await this._afterAgentRun();
+        return;
+      }
 
       yield* this._act(toolUses);
+      await this._afterAgentStep(step);
     }
     throw new Error("Maximum number of steps reached");
   }
@@ -116,24 +138,22 @@ export class Agent {
   }
 
   private _extractToolUses(message: AssistantMessage): ToolUseContent[] {
-    return message.content.filter(
-      (content): content is ToolUseContent => content.type === "tool_use",
-    );
+    return message.content.filter((content): content is ToolUseContent => content.type === "tool_use");
   }
 
   private async *_act(toolUses: ToolUseContent[]): AsyncGenerator<ToolMessage> {
     const pending = toolUses.map(async (toolUse, index) => {
       const tool = this.tools?.find((t) => t.name === toolUse.name);
       if (!tool) throw new Error(`Tool ${toolUse.name} not found`);
+      await this._beforeToolUse(toolUse);
       const result = await tool.invoke(toolUse.input);
+      await this._afterToolUse(toolUse, result);
       return { index, toolUseId: toolUse.id, result };
     });
 
     const remaining = new Set(pending.map((_, i) => i));
     while (remaining.size > 0) {
-      const resolved = (await Promise.race(
-        [...remaining].map((i) => pending[i]),
-      ))!;
+      const resolved = (await Promise.race([...remaining].map((i) => pending[i])))!;
       remaining.delete(resolved.index);
 
       const toolMessage: ToolMessage = {
@@ -153,6 +173,66 @@ export class Agent {
 
   private _appendMessage(message: NonSystemMessage) {
     this.messages.push(message);
+  }
+
+  private async _beforeAgentRun() {
+    for (const middleware of this.middlewares) {
+      if (!middleware.beforeAgentRun) continue;
+      const result = await middleware.beforeAgentRun(this._context);
+      if (result) {
+        Object.assign(this._context, result);
+      }
+    }
+  }
+
+  private async _afterAgentRun() {
+    for (const middleware of this.middlewares) {
+      if (!middleware.afterAgentRun) continue;
+      const result = await middleware.afterAgentRun(this._context);
+      if (result) {
+        Object.assign(this._context, result);
+      }
+    }
+  }
+
+  private async _beforeAgentStep(step: number) {
+    for (const middleware of this.middlewares) {
+      if (!middleware.beforeAgentStep) continue;
+      const result = await middleware.beforeAgentStep(this._context, step);
+      if (result) {
+        Object.assign(this._context, result);
+      }
+    }
+  }
+
+  private async _afterAgentStep(step: number) {
+    for (const middleware of this.middlewares) {
+      if (!middleware.afterAgentStep) continue;
+      const result = await middleware.afterAgentStep(this._context, step);
+      if (result) {
+        Object.assign(this._context, result);
+      }
+    }
+  }
+
+  private async _beforeToolUse(toolUse: ToolUseContent) {
+    for (const middleware of this.middlewares) {
+      if (!middleware.beforeToolUse) continue;
+      const result = await middleware.beforeToolUse(this._context, toolUse);
+      if (result) {
+        Object.assign(this._context, result);
+      }
+    }
+  }
+
+  private async _afterToolUse(toolUse: ToolUseContent, toolResult: unknown) {
+    for (const middleware of this.middlewares) {
+      if (!middleware.afterToolUse) continue;
+      const result = await middleware.afterToolUse(this._context, toolUse, toolResult);
+      if (result) {
+        Object.assign(this._context, result);
+      }
+    }
   }
 }
 

@@ -15,7 +15,8 @@ const model = new Model("ep-20251208110821-fnlmq", openai, {
   },
 });
 
-const agent = new Agent("weather_assistant", model, {
+const agent = new Agent({
+  model,
   prompt: "You are a weather assistant. You are given a location and you need to get the weather for that location.",
   tools: [
     defineTool({
@@ -43,5 +44,5 @@ const stream = await agent.stream({
 });
 
 for await (const message of stream) {
-  console.dir(message.content);
+  console.info(message.content);
 }
