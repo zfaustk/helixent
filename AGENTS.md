@@ -2,9 +2,9 @@
 
 Helixent is a small library for building **ReAct-style** agent loops on the **Bun** stack.
 
-This project is organized into **four layers**, plus a separate `community` area for third-party integrations.
+This project is organized into **three layers**, plus a separate `community` area for third-party integrations.
 
-## Architecture (4 layers)
+## Architecture (3 layers)
 
 ### 1) `foundation`
 
@@ -30,24 +30,16 @@ A reusable **ReAct-style agent loop**:
 
 This layer should depend only on `foundation`, and remain generic (not coding-specific).
 
-### 3) `coding-agent`
+### 3) `community` (in-repo integrations)
 
-A domain-specific agent built on the ReAct loop:
+In-repo integrations live under `src/community/*`.
 
-- Specializes the base agent behavior for **software engineering workflows** (e.g. reading files, proposing edits, running checks).
-- Defines the coding-focused policy around tool usage, safety constraints, and output shape.
+- Treat these as optional adapters over `foundation` interfaces.
+- Avoid coupling `foundation`/`agent` to integrations.
 
-This layer should build on `agent` + `foundation`, without leaking CLI concerns.
+Current integrations:
 
-### 4) `cli`
-
-The command-line interface:
-
-- Parses command-line arguments and environment variables.
-- Wires up a model provider, selects an agent (e.g. coding agent), and runs the loop.
-- Handles UX concerns like streaming, logging, and exit codes.
-
-This layer should be the only place that is “terminal product” specific.
+- `src/community/openai`: `OpenAIModelProvider` backed by the `openai` SDK, using Chat Completions with function tools.
 
 ## `community` (external)
 
@@ -62,17 +54,22 @@ Guidelines:
 
 - **Runtime / package manager**: [Bun](https://bun.com)
 - **Language**: TypeScript (strict, `moduleResolution: "bundler"`)
+- **Dependencies**: `openai` (provider SDK), `zod` (tool parameter schemas)
 
 ## Imports
 
-- **Library entry**: `import { … } from "helixent"` (maps to `./src` via `tsconfig` `paths`)
-- **Internal**: `@/…` maps to `./src/…`
+- **Library (subpath) imports**: `helixent/*` maps to `./src/*` via `tsconfig` `paths`
+    - Examples: `helixent/foundation`, `helixent/agent`, `helixent/community/openai`
+- **Internal**: `@/*` maps to `./src/*`
+
+Note: this repo currently uses **subpath** imports (e.g. `helixent/foundation`) in `index.ts`, not `import { … } from "helixent"`.
 
 ## Conventions
 
 - Keep comments minimal and intent-focused.
 - Avoid drive-by refactors outside the task at hand.
-- Provider options: `OpenAIModelProvider` merges `options` into `chat.completions.create` (e.g. provider-specific flags); defaults include `temperature: 0`, `top_p: 0`, and a `max_tokens` cap.
+- Provider options: `OpenAIModelProvider` merges `Model.options` into `chat.completions.create` (provider-specific flags allowed). Defaults include `temperature: 0` and `top_p: 0`.
+- Agent loop: when an assistant message contains tool calls, tools are invoked in parallel and appended as `tool_result` messages before continuing.
 
 ## Commands
 
@@ -80,6 +77,7 @@ Guidelines:
 bun install
 bun run dev
 bun run check
+bun run check:types
 bun run lint
 bun run lint:fix
 bun run build:js
@@ -91,3 +89,7 @@ Environment variables used by the sample root `index.ts` are provider-specific (
 ## Quality gate
 
 Run `bun run check` as the main gate (`tsc --noEmit` + ESLint). Use `bun run check:types` for type-check-only validation.
+
+## Notes
+
+- `package.json`’s `build:js` script currently targets `./src/index.ts`, but the current `src/` tree does not include `src/index.ts`.
