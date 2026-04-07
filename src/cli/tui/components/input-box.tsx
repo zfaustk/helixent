@@ -1,4 +1,4 @@
-import { Box, Text } from "ink";
+import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { useState } from "react";
 
@@ -15,14 +15,31 @@ const WELCOME_MESSAGES = [
   "Your next idea goes here...",
 ];
 
-// eslint-disable-next-line no-unused-vars
-export function InputBox({ disabled, onSubmit }: { disabled?: boolean; onSubmit?: (text: string) => void }) {
+export function InputBox({
+  disabled,
+  onSubmit,
+  onAbort,
+}: {
+  disabled?: boolean;
+  // eslint-disable-next-line no-unused-vars
+  onSubmit?: (text: string) => void;
+  onAbort?: () => void;
+}) {
   const [firstMessage, setFirstMessage] = useState(true);
   const [text, setText] = useState("");
   const handleChange = (text: string) => {
     if (disabled) return;
     setText(text);
   };
+  useInput(
+    (_input, key) => {
+      if (key.escape || (key.ctrl && _input === "c")) {
+        onAbort?.();
+      }
+    },
+    { isActive: !!disabled },
+  );
+
   const handleSubmit = () => {
     onSubmit?.(text);
     setText("");

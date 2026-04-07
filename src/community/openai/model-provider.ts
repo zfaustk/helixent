@@ -23,11 +23,13 @@ export class OpenAIModelProvider implements ModelProvider {
     messages,
     tools,
     options,
+    signal,
   }: {
     model: string;
     messages: Message[];
     tools?: Tool[];
     options?: Record<string, unknown>;
+    signal?: AbortSignal;
   }) {
     const params = {
       model,
@@ -37,7 +39,7 @@ export class OpenAIModelProvider implements ModelProvider {
       top_p: 0,
       ...options,
     } satisfies ChatCompletionCreateParamsNonStreaming;
-    const { choices } = await this._client.chat.completions.create(params);
+    const { choices } = await this._client.chat.completions.create(params, { signal });
     return parseAssistantMessage(choices[0]!.message!);
   }
 }

@@ -43,6 +43,7 @@ export class Model {
       options: this.options,
       messages: messages,
       tools: context.tools,
+      signal: context.signal,
     });
   }
 }

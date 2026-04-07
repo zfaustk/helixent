@@ -43,6 +43,8 @@ export interface AgentOptions {
  */
 export class Agent {
   private readonly _context: AgentContext;
+  private _streaming = false;
+  private _abortController: AbortController | null = null;
 
   readonly name?: string;
   readonly model: Model;
@@ -109,29 +111,55 @@ export class Agent {
   }
 
   /**
+   * Gets whether the agent is streaming.
+   */
+  get streaming() {
+    return this._streaming;
+  }
+
+  /**
    * Runs the agent.
    * @param message - The message to send to the agent.
    * @returns The response from the agent. If the agent ran successfully, the response will be the final response from the agent. If the agent stopped running due to a maximum number of steps being reached, the response will be the last response from the agent.
    */
   async *stream(message: UserMessage): AsyncGenerator<AssistantMessage | ToolMessage> {
+    if (this._streaming) {
+      throw new Error("Agent is already streaming");
+    }
+
+    this._abortController = new AbortController();
     this._appendMessage(message);
     await this._beforeAgentRun();
-    for (let step = 1; step <= this.options.maxSteps; step++) {
-      await this._beforeAgentStep(step);
-      const assistantMessage = await this._think();
-      await this._afterModel(assistantMessage);
-      yield assistantMessage;
+    this._streaming = true;
+    try {
+      for (let step = 1; step <= this.options.maxSteps; step++) {
+        this._abortController.signal.throwIfAborted();
+        await this._beforeAgentStep(step);
+        const assistantMessage = await this._think();
+        await this._afterModel(assistantMessage);
+        yield assistantMessage;
 
-      const toolUses = this._extractToolUses(assistantMessage);
-      if (toolUses.length === 0) {
-        await this._afterAgentRun();
-        return;
+        const toolUses = this._extractToolUses(assistantMessage);
+        if (toolUses.length === 0) {
+          await this._afterAgentRun();
+          return;
+        }
+
+        yield* this._act(toolUses);
+        await this._afterAgentStep(step);
       }
-
-      yield* this._act(toolUses);
-      await this._afterAgentStep(step);
+      throw new Error("Maximum number of steps reached");
+    } finally {
+      this._streaming = false;
+      this._abortController = null;
     }
-    throw new Error("Maximum number of steps reached");
+  }
+
+  /**
+   * Aborts the current stream, including any in-flight model request.
+   */
+  abort() {
+    this._abortController?.abort();
   }
 
   private async _think(): Promise<AssistantMessage> {
@@ -139,6 +167,7 @@ export class Agent {
       prompt: this.prompt,
       messages: this.messages,
       tools: this.tools,
+      signal: this._abortController?.signal,
     };
     await this._beforeModel(modelContext);
     const message = await this.model.invoke(modelContext);
@@ -152,12 +181,17 @@ export class Agent {
 
   private async *_act(toolUses: ToolUseContent[]): AsyncGenerator<ToolMessage> {
     const pending = toolUses.map(async (toolUse, index) => {
-      const tool = this.tools?.find((t) => t.name === toolUse.name);
-      if (!tool) throw new Error(`Tool ${toolUse.name} not found`);
-      await this._beforeToolUse(toolUse);
-      const result = await tool.invoke(toolUse.input);
-      await this._afterToolUse(toolUse, result);
-      return { index, toolUseId: toolUse.id, result };
+      try {
+        const tool = this.tools?.find((t) => t.name === toolUse.name);
+        if (!tool) throw new Error(`Tool ${toolUse.name} not found`);
+        await this._beforeToolUse(toolUse);
+        const result = await tool.invoke(toolUse.input);
+        await this._afterToolUse(toolUse, result);
+        return { index, toolUseId: toolUse.id, result };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { index, toolUseId: toolUse.id, result: `Error: ${message}` };
+      }
     });
 
     const remaining = new Set(pending.map((_, i) => i));

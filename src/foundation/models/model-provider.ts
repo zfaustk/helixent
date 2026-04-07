@@ -21,10 +21,13 @@ export interface ModelProvider {
     tools,
     // eslint-disable-next-line no-unused-vars
     options,
+    // eslint-disable-next-line no-unused-vars
+    signal,
   }: {
     model: string;
     messages: Message[];
     tools?: Tool[];
     options?: Record<string, unknown>;
+    signal?: AbortSignal;
   }): Promise<AssistantMessage>;
 }

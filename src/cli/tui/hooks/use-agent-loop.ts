@@ -30,6 +30,10 @@ export function useAgentLoop() {
     loadingRef.current = loading;
   }, [loading]);
 
+  const abort = useCallback(() => {
+    agent.abort();
+  }, [agent]);
+
   const onSubmit = useCallback(
     async (text: string) => {
       if (text === "exit" || text === "quit" || text === "/exit" || text === "/quit") {
@@ -49,10 +53,13 @@ export function useAgentLoop() {
         const userMessage: UserMessage = { role: "user", content: [{ type: "text", text }] };
         setMessages((prev) => [...prev, userMessage]);
 
-        const stream = await agent.stream(userMessage);
+        const stream = agent.stream(userMessage);
         for await (const message of stream) {
           setMessages((prev) => [...prev, message]);
         }
+      } catch (error) {
+        if (isAbortError(error)) return;
+        throw error;
       } finally {
         setLoading(false);
       }
@@ -60,5 +67,13 @@ export function useAgentLoop() {
     [agent],
   );
 
-  return { agent, loading, messages, onSubmit };
+  return { agent, loading, messages, onSubmit, abort };
+}
+
+function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (error instanceof Error && error.name === "AbortError") return true;
+  // OpenAI SDK throws APIUserAbortError
+  if (error instanceof Error && error.constructor.name === "APIUserAbortError") return true;
+  return false;
 }
