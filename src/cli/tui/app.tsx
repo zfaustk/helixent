@@ -17,6 +17,10 @@ export function App({ agent }: { agent: Agent }) {
       process.exit(0);
       return;
     }
+    if (text === "/clear") {
+      setMessages([]);
+      return;
+    }
 
     if (loading) return;
     setLoading(true);
